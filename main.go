@@ -25,7 +25,8 @@ func main() {
 	}
 	defer db.Close()
 
-	authHandler := handler.NewAuthHandler()
-	http.HandleFunc("/register", authHandler.RegisterHandler)
+	authHandler := handler.NewAuthHandler(db)
+	http.HandleFunc("/register", authHandler.Register)
+	http.HandleFunc("/login", authHandler.Login)
 	http.ListenAndServe(":8080", nil)
 }
