@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -86,7 +89,14 @@ func (ah *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"message": "Login successful", "email": email})
+	token, err := generateToken(email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Error generating token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Login successful", "email": email, "token": token})
+
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -97,4 +107,15 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func generateToken(email string) (string, error) {
+	secret := os.Getenv("JWT_SECRET")
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"email": email,
+		"exp":   time.Now().Add(24 * time.Hour).Unix(),
+	})
+
+	return token.SignedString([]byte(secret))
 }
