@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -17,6 +18,11 @@ type AuthHandler struct {
 
 func NewAuthHandler(db *sql.DB) *AuthHandler {
 	return &AuthHandler{db: db}
+}
+
+type UserResponse struct {
+	ID    int    `json:"id"`
+	Email string `json:"email"`
 }
 
 func (ah *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +103,42 @@ func (ah *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Login successful", "email": email, "token": token})
 
+}
+
+func (ah *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	parts := strings.SplitN(authHeader, " ", 2)
+	tokenStr := parts[1]
+	secret := os.Getenv("JWT_SECRET")
+
+	token, _ := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+
+	claims, _ := token.Claims.(jwt.MapClaims)
+	email := claims["email"].(string)
+	userId := `SELECT id FROM users WHERE email = $1 `
+	var id int
+	err := ah.db.QueryRow(userId, email).Scan(&id)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "User not found")
+		return
+	}
+	res := UserResponse{
+		ID:    id,
+		Email: email,
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (ah *AuthHandler) Health(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Server is running"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
