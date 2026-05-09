@@ -1,13 +1,15 @@
 package handler
 
 import (
+	"auth-api/model"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -20,141 +22,156 @@ func NewAuthHandler(db *sql.DB) *AuthHandler {
 	return &AuthHandler{db: db}
 }
 
-type UserResponse struct {
-	ID    int    `json:"id"`
-	Email string `json:"email"`
-}
+func (ah *AuthHandler) Register(c *gin.Context) {
 
-func (ah *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	var req model.RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
-	var body map[string]string
-	json.NewDecoder(r.Body).Decode(&body)
-
-	email := body["email"]
-	password := body["password"]
-
-	if email == "" || password == "" {
-		writeError(w, http.StatusBadRequest, "Email and Password are required")
+	if c.Request.Method != http.MethodPost {
+		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "Method not allowed"})
 		return
 	}
 
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	if req.Email == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email and Password are required"})
+		return
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 14)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Error hashing password")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error hashing password"})
 		return
 	}
 
 	var emailExists string
-	err = ah.db.QueryRow("SELECT email FROM users WHERE email = $1", email).Scan(&emailExists)
+	err = ah.db.QueryRow("SELECT email FROM users WHERE email = $1", req.Email).Scan(&emailExists)
 	if err == nil {
-		writeError(w, http.StatusConflict, "Email already registered")
+		c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
 		return
 	}
 
-	_, err = ah.db.Exec("INSERT INTO users (email, password) VALUES ($1, $2)", email, string(passwordHash))
+	_, err = ah.db.Exec("INSERT INTO users (email, password) VALUES ($1, $2)", req.Email, string(passwordHash))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Error saving user to database")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving user to database"})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{"message": "User registered successfully", "email": email})
+	c.JSON(http.StatusCreated, gin.H{"message": "User registered successfully", "email": req.Email})
 }
 
-func (ah *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+func (ah *AuthHandler) Login(c *gin.Context) {
+
+	var req model.LoginRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request body",
+		})
 		return
 	}
 
-	var body map[string]string
-	json.NewDecoder(r.Body).Decode(&body)
-
-	email := body["email"]
-	password := body["password"]
-
-	if email == "" || password == "" {
-		writeError(w, http.StatusBadRequest, "Email and Password are required")
+	if req.Email == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Email and password are required",
+		})
 		return
 	}
 
-	var passwordHash string
-	err := ah.db.QueryRow("SELECT password FROM users WHERE email = $1", email).Scan(&passwordHash)
+	var (
+		id           int
+		passwordHash string
+	)
+
+	query := `
+		SELECT id, password
+		FROM users
+		WHERE email = $1
+	`
+
+	err := ah.db.QueryRow(query, req.Email).
+		Scan(&id, &passwordHash)
+
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "Invalid email or password")
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid email or password",
+		})
 		return
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
+	err = bcrypt.CompareHashAndPassword(
+		[]byte(passwordHash),
+		[]byte(req.Password),
+	)
+
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "Invalid email or password")
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid email or password",
+		})
 		return
 	}
 
-	token, err := generateToken(email)
+	token, err := generateToken(id, req.Email)
+
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Error generating token")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Error generating token",
+		})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"message": "Login successful", "email": email, "token": token})
-
-}
-
-func (ah *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	authHeader := r.Header.Get("Authorization")
-	parts := strings.SplitN(authHeader, " ", 2)
-	tokenStr := parts[1]
-	secret := os.Getenv("JWT_SECRET")
-
-	token, _ := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Login successful",
+		"token":   token,
 	})
+}
 
-	claims, _ := token.Claims.(jwt.MapClaims)
-	email := claims["email"].(string)
-	userId := `SELECT id FROM users WHERE email = $1 `
-	var id int
-	err := ah.db.QueryRow(userId, email).Scan(&id)
+func (ah *AuthHandler) Profile(c *gin.Context) {
+
+	userID := int(c.MustGet("id").(float64))
+
+	query := `SELECT id, email FROM users WHERE id = $1`
+
+	var user model.UserResponse
+
+	err := ah.db.QueryRow(query, int(userID)).
+		Scan(&user.ID, &user.Email)
+
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "User not found")
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "User not found",
+		})
 		return
 	}
-	res := UserResponse{
-		ID:    id,
-		Email: email,
-	}
-	writeJSON(w, http.StatusOK, res)
+
+	c.JSON(http.StatusOK, user)
 }
 
-func (ah *AuthHandler) Health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"message": "Server is running"})
+func (ah *AuthHandler) Health(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"message": "Server is running"})
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+func writeJSON(c *gin.Context, status int, data any) {
+	c.Header("Content-Type", "application/json")
+	c.Status(status)
+	json.NewEncoder(c.Writer).Encode(data)
 }
 
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+func writeError(c *gin.Context, status int, message string) {
+	writeJSON(c, status, map[string]string{"error": message})
 }
 
-func generateToken(email string) (string, error) {
+func generateToken(id int, email string) (string, error) {
 	secret := os.Getenv("JWT_SECRET")
+
+	if secret == "" {
+		return "", errors.New("JWT_SECRET environment variable not set")
+	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"id":    id,
 		"email": email,
 		"exp":   time.Now().Add(24 * time.Hour).Unix(),
 	})

@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+
+	r := gin.Default()
 
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("error loading env")
@@ -25,10 +28,21 @@ func main() {
 	}
 	defer db.Close()
 
+	r.GET("/gin", func(c *gin.Context) {
+		c.JSON(http.StatusOK, "HELLO INI PAKE GIN")
+	})
+
 	authHandler := handler.NewAuthHandler(db)
-	http.HandleFunc("/health", authHandler.Health)
-	http.HandleFunc("/register", authHandler.Register)
-	http.HandleFunc("/login", authHandler.Login)
-	http.HandleFunc("/profile", handler.JWTMiddleware(authHandler.Profile))
-	http.ListenAndServe(":8080", nil)
+
+	r.GET("/health", authHandler.Health)
+	r.POST("/register", authHandler.Register)
+	r.POST("/login", authHandler.Login)
+
+	api := r.Group("/api")
+	api.Use(handler.JWTMiddleware)
+	{
+		api.GET("/profile", authHandler.Profile)
+	}
+
+	r.Run()
 }

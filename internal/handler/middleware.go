@@ -1,41 +1,57 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func JWTMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func JWTMiddleware(c *gin.Context) {
 
-	return func(w http.ResponseWriter, r *http.Request) {
+	authHeader := c.GetHeader("Authorization")
 
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			writeError(w, http.StatusUnauthorized, "Missing Authorization header")
-			return
-		}
-
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			writeError(w, http.StatusUnauthorized, "Invalid Authorization header format")
-			return
-		}
-
-		tokenStr := parts[1]
-		secret := os.Getenv("JWT_SECRET")
-
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			return []byte(secret), nil
+	if authHeader == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			"error": "Authorization header required",
 		})
+		return
+	}
 
-		if err != nil || !token.Valid {
-			writeError(w, http.StatusUnauthorized, "Invalid or expired token")
-			return
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid authorization format",
+		})
+		return
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	secret := os.Getenv("JWT_SECRET")
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
 		}
 
-		next(w, r)
+		return []byte(secret), nil
+	})
+
+	if err != nil || !token.Valid {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid or expired token",
+		})
+		return
 	}
+
+	claims := token.Claims.(jwt.MapClaims)
+
+	c.Set("id", claims["id"])
+	c.Set("email", claims["email"])
+
+	c.Next()
 }
