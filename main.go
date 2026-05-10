@@ -18,6 +18,8 @@ func main() {
 		fmt.Println("error loading env")
 	}
 
+	rdb := database.NewRedisClient()
+
 	db, err := database.NewPostgresDB()
 	if err != nil {
 		fmt.Println("error connecting to database:", err)
@@ -32,17 +34,18 @@ func main() {
 		c.JSON(http.StatusOK, "HELLO INI PAKE GIN")
 	})
 
-	authHandler := handler.NewAuthHandler(db)
+	authHandler := handler.NewAuthHandler(db, rdb)
 
 	r.GET("/health", authHandler.Health)
 	r.POST("/register", authHandler.Register)
 	r.POST("/login", authHandler.Login)
 
 	api := r.Group("/api")
-	api.Use(handler.JWTMiddleware)
+	api.Use(handler.JWTMiddleware(rdb))
 	{
 		api.GET("/profile", authHandler.Profile)
+		api.POST("/logout", authHandler.Logout)
 	}
 
-	r.Run()
+	r.Run(":9090")
 }

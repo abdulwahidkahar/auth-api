@@ -1,25 +1,29 @@
 package handler
 
 import (
+	"auth-api/internal/database"
 	"auth-api/model"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	db *sql.DB
+	db  *sql.DB
+	rdb *redis.Client
 }
 
-func NewAuthHandler(db *sql.DB) *AuthHandler {
-	return &AuthHandler{db: db}
+func NewAuthHandler(db *sql.DB, rdb *redis.Client) *AuthHandler {
+	return &AuthHandler{db: db, rdb: rdb}
 }
 
 func (ah *AuthHandler) Register(c *gin.Context) {
@@ -46,15 +50,13 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	var emailExists string
-	err = ah.db.QueryRow("SELECT email FROM users WHERE email = $1", req.Email).Scan(&emailExists)
-	if err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
-		return
-	}
-
 	_, err = ah.db.Exec("INSERT INTO users (email, password) VALUES ($1, $2)", req.Email, string(passwordHash))
 	if err != nil {
+		pqErr, ok := err.(*pq.Error)
+		if ok && pqErr.Code == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving user to database"})
 		return
 	}
@@ -128,6 +130,29 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+func (ah *AuthHandler) Logout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+
+	if authHeader == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+		return
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	err := database.BlacklistToken(c.Request.Context(), ah.rdb, tokenString, 24*time.Hour)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Logged out successfully",
+	})
+}
+
 func (ah *AuthHandler) Profile(c *gin.Context) {
 
 	userID := int(c.MustGet("id").(float64))
@@ -151,16 +176,6 @@ func (ah *AuthHandler) Profile(c *gin.Context) {
 
 func (ah *AuthHandler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Server is running"})
-}
-
-func writeJSON(c *gin.Context, status int, data any) {
-	c.Header("Content-Type", "application/json")
-	c.Status(status)
-	json.NewEncoder(c.Writer).Encode(data)
-}
-
-func writeError(c *gin.Context, status int, message string) {
-	writeJSON(c, status, map[string]string{"error": message})
 }
 
 func generateToken(id int, email string) (string, error) {
