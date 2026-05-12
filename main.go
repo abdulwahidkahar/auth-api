@@ -4,6 +4,7 @@ import (
 	"auth-api/internal/database"
 	"auth-api/internal/handler"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -22,7 +23,7 @@ func main() {
 
 	db, err := database.NewPostgresDB()
 	if err != nil {
-		fmt.Println("error connecting to database:", err)
+		log.Fatal("error connecting to database:", err)
 	}
 
 	if err == nil {
@@ -35,6 +36,7 @@ func main() {
 	})
 
 	authHandler := handler.NewAuthHandler(db, rdb)
+	walletHandler := handler.NewWalletHandler(db)
 
 	r.GET("/health", authHandler.Health)
 	r.POST("/register", authHandler.Register)
@@ -45,6 +47,9 @@ func main() {
 	{
 		api.GET("/profile", authHandler.Profile)
 		api.POST("/logout", authHandler.Logout)
+		api.POST("/wallet/topup", walletHandler.TopUp)
+		api.GET("/wallet/balance", walletHandler.GetBalance)
+		api.POST("/wallet/transfer", walletHandler.Transfer)
 	}
 
 	r.Run(":9090")

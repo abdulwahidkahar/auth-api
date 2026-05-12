@@ -50,7 +50,19 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	_, err = ah.db.Exec("INSERT INTO users (email, password) VALUES ($1, $2)", req.Email, string(passwordHash))
+	tx, err := ah.db.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error beginning transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	var userID int
+	err = tx.QueryRowContext(c.Request.Context(),
+		"INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id",
+		req.Email, string(passwordHash),
+	).Scan(&userID)
+
 	if err != nil {
 		pqErr, ok := err.(*pq.Error)
 		if ok && pqErr.Code == "23505" {
@@ -58,6 +70,16 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving user to database"})
+		return
+	}
+
+	if err := CreateWallet(c.Request.Context(), tx, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create wallet"})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error committing transaction"})
 		return
 	}
 
