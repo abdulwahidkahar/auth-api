@@ -20,6 +20,7 @@ REST API layanan pembayaran berbasis Go dengan fitur autentikasi JWT, profile re
 | `POST` | `/api/logout` | Yes | Invalidate JWT dengan blacklist Redis |
 | `GET` | `/api/profile` | Yes | Ambil profile user dari JWT context |
 | `POST` | `/api/wallet/topup` | Yes | Tambah saldo wallet user login |
+| `GET` | `/api/wallet/topup/history` | Yes | Ambil riwayat top up user login |
 | `GET` | `/api/wallet/balance` | Yes | Ambil saldo wallet user login |
 | `POST` | `/api/wallet/transfer` | Yes | Transfer saldo ke wallet lain |
 | `GET` | `/api/wallet/transfer` | Yes | Ambil riwayat transfer user login |

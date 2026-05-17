@@ -1,0 +1,7 @@
+CREATE TABLE top_up_history (
+    id SERIAL PRIMARY KEY,
+    wallet_id INT NOT NULL,
+    amount BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE CASCADE
+);

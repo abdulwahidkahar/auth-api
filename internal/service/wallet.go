@@ -1,0 +1,105 @@
+package service
+
+import (
+	"auth-api/internal/model"
+	"auth-api/internal/repository"
+	"context"
+	"database/sql"
+	"errors"
+)
+
+type WalletService struct {
+	db         *sql.DB
+	walletRepo *repository.WalletRepository
+}
+
+func NewWalletService(db *sql.DB, walletRepo *repository.WalletRepository) *WalletService {
+	return &WalletService{
+		db:         db,
+		walletRepo: walletRepo,
+	}
+}
+
+func (s *WalletService) TopUp(ctx context.Context, userID int, amount int64) error {
+	if amount <= 0 {
+		return errors.New("amount must be greater than 0")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	err = s.walletRepo.UpdateBalanceTx(ctx, tx, userID, amount)
+	if err != nil {
+		return err
+	}
+
+	if err := s.walletRepo.CreateTopUpHistoryTx(ctx, tx, userID, amount); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *WalletService) GetBalance(ctx context.Context, userID int) (int64, error) {
+	balance, err := s.walletRepo.GetBalance(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return balance, nil
+}
+
+func (s *WalletService) GetWallet(ctx context.Context, userID int) (model.WalletResponse, error) {
+	wallet, err := s.walletRepo.GetWalletByUserID(ctx, userID)
+	if err != nil {
+		return model.WalletResponse{}, err
+	}
+
+	return wallet, nil
+}
+
+func (s *WalletService) Transfer(ctx context.Context, fromUserID, toWalletID int, amount int64) (model.TransferResponse, error) {
+	if amount <= 0 {
+		return model.TransferResponse{}, errors.New("amount must be greater than 0")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.TransferResponse{}, err
+	}
+	defer tx.Rollback()
+
+	transfer, err := s.walletRepo.TransferTx(ctx, tx, fromUserID, toWalletID, amount)
+	if err != nil {
+		return model.TransferResponse{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return model.TransferResponse{}, err
+	}
+
+	return transfer, nil
+}
+
+func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int) ([]model.TransferHistory, error) {
+	history, err := s.walletRepo.TransferHistory(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return history, nil
+}
+
+func (s *WalletService) GetHistoryTopUp(ctx context.Context, userID int) ([]model.TopUpHistory, error) {
+	history, err := s.walletRepo.TopUpHistory(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return history, nil
+}

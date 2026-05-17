@@ -1,28 +1,21 @@
 package handler
 
 import (
-	"auth-api/model"
-	"context"
+	"auth-api/internal/model"
+	"auth-api/internal/service"
 	"database/sql"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
 
 type WalletHandler struct {
-	db *sql.DB
+	walletService *service.WalletService
 }
 
-func NewWalletHandler(db *sql.DB) *WalletHandler {
-	return &WalletHandler{db: db}
-}
-
-func CreateWallet(ctx context.Context, tx *sql.Tx, userID int) error {
-	_, err := tx.ExecContext(ctx,
-		"INSERT INTO wallets (user_id, balance, currency) VALUES ($1, 0, 'IDR')",
-		userID,
-	)
-	return err
+func NewWalletHandler(walletService *service.WalletService) *WalletHandler {
+	return &WalletHandler{walletService: walletService}
 }
 
 func (wh *WalletHandler) TopUp(c *gin.Context) {
@@ -34,25 +27,9 @@ func (wh *WalletHandler) TopUp(c *gin.Context) {
 		return
 	}
 
-	tx, err := wh.db.BeginTx(c.Request.Context(), nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
-		return
-	}
-	defer tx.Rollback()
-
-	_, err = tx.ExecContext(c.Request.Context(),
-		"UPDATE wallets SET balance = balance + $1 WHERE user_id = $2",
-		req.Amount, userID,
-	)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error updating wallet balance"})
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error committing transaction"})
+	if err := wh.walletService.TopUp(c.Request.Context(), userID, req.Amount); err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -63,20 +40,10 @@ func (wh *WalletHandler) GetBalance(c *gin.Context) {
 
 	userID := int(c.MustGet("id").(float64))
 
-	query := "SELECT id, user_id, balance, currency, created_at, updated_at FROM wallets WHERE user_id = $1"
-
-	var wallet model.WalletResponse
-
-	err := wh.db.QueryRowContext(c.Request.Context(), query, userID).
-		Scan(&wallet.ID, &wallet.UserID, &wallet.Balance, &wallet.Currency, &wallet.CreatedAt, &wallet.UpdatedAt)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Balance not found or user does not exist"})
-		return
-	}
-
+	wallet, err := wh.walletService.GetWallet(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching wallet balance"})
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -95,121 +62,57 @@ func (wh *WalletHandler) Transfer(c *gin.Context) {
 		return
 	}
 
-	tx, err := wh.db.BeginTx(c.Request.Context(), nil)
+	transfer, err := wh.walletService.Transfer(c.Request.Context(), userID, req.ToWalletID, req.Amount)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
-	defer tx.Rollback()
-	var fromWallet model.Wallet
-	err = tx.QueryRowContext(c.Request.Context(),
-		"SELECT id, user_id, balance, currency FROM wallets WHERE user_id = $1 FOR UPDATE",
-		userID,
-	).Scan(&fromWallet.ID, &fromWallet.UserID, &fromWallet.Balance, &fromWallet.Currency)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Sender wallet not found"})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching sender wallet"})
-		return
-	}
-
-	if req.Amount > fromWallet.Balance {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Insufficient balance"})
-		return
-	}
-
-	var toWallet model.Wallet
-	err = tx.QueryRowContext(c.Request.Context(),
-		"SELECT id, user_id, balance, currency FROM wallets WHERE id = $1 FOR UPDATE",
-		req.ToWalletID,
-	).Scan(&toWallet.ID, &toWallet.UserID, &toWallet.Balance, &toWallet.Currency)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Recipient wallet not found"})
-		return
-	}
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching recipient wallet"})
-		return
-	}
-
-	_, err = tx.ExecContext(c.Request.Context(),
-		"UPDATE wallets SET balance = balance - $1 WHERE user_id = $2",
-		req.Amount, userID,
-	)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error updating sender wallet"})
-		return
-	}
-
-	_, err = tx.ExecContext(c.Request.Context(),
-		"UPDATE wallets SET balance = balance + $1 WHERE id = $2",
-		req.Amount, req.ToWalletID,
-	)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error updating recipient wallet"})
-		return
-	}
-
-	var transferID int
-	err = tx.QueryRowContext(c.Request.Context(),
-		"INSERT INTO transfers (from_wallet_id, to_wallet_id, amount) VALUES ($1, $2, $3) RETURNING id",
-		fromWallet.ID, toWallet.ID, req.Amount,
-	).Scan(&transferID)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error recording transfer"})
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error committing transaction"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Transfer successful", "transfer": model.TransferResponse{
-		ID:           transferID,
-		FromWalletID: fromWallet.ID,
-		ToWalletID:   toWallet.ID,
-		Amount:       req.Amount,
-	}})
+	c.JSON(http.StatusOK, gin.H{"message": "Transfer successful", "transfer": transfer})
 }
 
 func (wh *WalletHandler) GetHistoryTransfer(c *gin.Context) {
 	userID := int(c.MustGet("id").(float64))
 
-	query := `
-		SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.created_at
-		FROM transfers t
-		JOIN wallets w ON (t.from_wallet_id = w.id OR t.to_wallet_id = w.id)
-		WHERE w.user_id = $1
-		ORDER BY t.created_at DESC
-	`
-
-	rows, err := wh.db.QueryContext(c.Request.Context(), query, userID)
+	transfers, err := wh.walletService.GetHistoryTransfer(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching transfer history"})
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
-	}
-	defer rows.Close()
-
-	var transfers []model.TransferResponse
-	for rows.Next() {
-		var transfer model.TransferResponse
-		err = rows.Scan(&transfer.ID, &transfer.FromWalletID, &transfer.ToWalletID, &transfer.Amount, &transfer.CreatedAt)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error scanning transfer data"})
-			return
-		}
-		transfers = append(transfers, transfer)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"transfers": transfers})
+}
+
+func (wh *WalletHandler) GetHistoryTopUp(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+
+	topUps, err := wh.walletService.GetHistoryTopUp(c.Request.Context(), userID)
+	if err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"top_ups": topUps})
+}
+
+func mapWalletError(err error) (int, string) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return http.StatusNotFound, "Wallet not found"
+	case err.Error() == "amount must be greater than 0":
+		return http.StatusBadRequest, err.Error()
+	case err.Error() == "cannot transfer to the same wallet":
+		return http.StatusBadRequest, err.Error()
+	case err.Error() == "insufficient balance":
+		return http.StatusBadRequest, "Insufficient balance"
+	case err.Error() == "sender wallet not found":
+		return http.StatusNotFound, "Sender wallet not found"
+	case err.Error() == "recipient wallet not found":
+		return http.StatusNotFound, "Recipient wallet not found"
+	default:
+		return http.StatusInternalServerError, err.Error()
+	}
 }

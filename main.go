@@ -3,6 +3,8 @@ package main
 import (
 	"auth-api/internal/database"
 	"auth-api/internal/handler"
+	"auth-api/internal/repository"
+	"auth-api/internal/service"
 	"fmt"
 	"log"
 
@@ -30,8 +32,11 @@ func main() {
 	}
 	defer db.Close()
 
-	authHandler := handler.NewAuthHandler(db, rdb)
-	walletHandler := handler.NewWalletHandler(db)
+	walletRepo := repository.NewWalletRepository(db)
+	authService := service.NewAuthService(db, repository.NewUserRepository(db), walletRepo)
+	walletService := service.NewWalletService(db, walletRepo)
+	authHandler := handler.NewAuthHandler(authService, rdb)
+	walletHandler := handler.NewWalletHandler(walletService)
 
 	r.GET("/health", authHandler.Health)
 	r.POST("/register", authHandler.Register)
@@ -43,6 +48,7 @@ func main() {
 		api.GET("/profile", authHandler.Profile)
 		api.POST("/logout", authHandler.Logout)
 		api.POST("/wallet/topup", walletHandler.TopUp)
+		api.GET("/wallet/topup/history", walletHandler.GetHistoryTopUp)
 		api.GET("/wallet/balance", walletHandler.GetBalance)
 		api.POST("/wallet/transfer", walletHandler.Transfer)
 		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)
