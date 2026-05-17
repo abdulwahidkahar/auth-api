@@ -68,13 +68,25 @@ func (s *WalletService) Transfer(ctx context.Context, fromUserID, toWalletID int
 		return model.TransferResponse{}, errors.New("amount must be greater than 0")
 	}
 
+	fromWallet, err := s.walletRepo.GetWalletByUserID(ctx, fromUserID)
+	if err == sql.ErrNoRows {
+		return model.TransferResponse{}, errors.New("sender wallet not found")
+	}
+	if err != nil {
+		return model.TransferResponse{}, err
+	}
+
+	if fromWallet.ID == toWalletID {
+		return model.TransferResponse{}, errors.New("cannot transfer to the same wallet")
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.TransferResponse{}, err
 	}
 	defer tx.Rollback()
 
-	transfer, err := s.walletRepo.TransferTx(ctx, tx, fromUserID, toWalletID, amount)
+	transfer, err := s.walletRepo.TransferTx(ctx, tx, fromWallet.ID, toWalletID, amount)
 	if err != nil {
 		return model.TransferResponse{}, err
 	}
@@ -86,8 +98,8 @@ func (s *WalletService) Transfer(ctx context.Context, fromUserID, toWalletID int
 	return transfer, nil
 }
 
-func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int) ([]model.TransferHistory, error) {
-	history, err := s.walletRepo.TransferHistory(ctx, userID)
+func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int, page, limit int) ([]model.TransferHistory, error) {
+	history, err := s.walletRepo.TransferHistory(ctx, userID, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +107,8 @@ func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int) ([]m
 	return history, nil
 }
 
-func (s *WalletService) GetHistoryTopUp(ctx context.Context, userID int) ([]model.TopUpHistory, error) {
-	history, err := s.walletRepo.TopUpHistory(ctx, userID)
+func (s *WalletService) GetHistoryTopUp(ctx context.Context, userID int, page, limit int) ([]model.TopUpHistory, error) {
+	history, err := s.walletRepo.TopUpHistory(ctx, userID, page, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -107,24 +107,12 @@ func (r *WalletRepository) CreateTopUpHistoryTx(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromUserID, toWalletID int, amount int64) (model.TransferResponse, error) {
-	var fromWallet model.Wallet
-	err := tx.QueryRowContext(ctx,
-		"SELECT id, user_id, balance, currency FROM wallets WHERE user_id = $1",
-		fromUserID,
-	).Scan(&fromWallet.ID, &fromWallet.UserID, &fromWallet.Balance, &fromWallet.Currency)
-	if err == sql.ErrNoRows {
-		return model.TransferResponse{}, errors.New("sender wallet not found")
-	}
-	if err != nil {
-		return model.TransferResponse{}, err
-	}
-
-	if fromWallet.ID == toWalletID {
+func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromWalletID, toWalletID int, amount int64) (model.TransferResponse, error) {
+	if fromWalletID == toWalletID {
 		return model.TransferResponse{}, errors.New("cannot transfer to the same wallet")
 	}
 
-	firstWalletID, secondWalletID := fromWallet.ID, toWalletID
+	firstWalletID, secondWalletID := fromWalletID, toWalletID
 	if firstWalletID > secondWalletID {
 		firstWalletID, secondWalletID = secondWalletID, firstWalletID
 	}
@@ -154,7 +142,7 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromUserI
 		return model.TransferResponse{}, err
 	}
 
-	fromWallet, ok := lockedWallets[fromWallet.ID]
+	fromWallet, ok := lockedWallets[fromWalletID]
 	if !ok {
 		return model.TransferResponse{}, errors.New("sender wallet not found")
 	}
@@ -203,13 +191,14 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromUserI
 	}, nil
 }
 
-func (r *WalletRepository) TransferHistory(ctx context.Context, userID int) ([]model.TransferHistory, error) {
+func (r *WalletRepository) TransferHistory(ctx context.Context, userID int, page, limit int) ([]model.TransferHistory, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.created_at
 		FROM transfers t
 		JOIN wallets w ON (t.from_wallet_id = w.id OR t.to_wallet_id = w.id)
 		WHERE w.user_id = $1
-		ORDER BY t.created_at DESC`, userID)
+		ORDER BY t.created_at DESC
+		LIMIT $2 OFFSET $3`, userID, limit, (page-1)*limit)
 	if err != nil {
 		return nil, err
 	}
@@ -231,13 +220,14 @@ func (r *WalletRepository) TransferHistory(ctx context.Context, userID int) ([]m
 	return history, nil
 }
 
-func (r *WalletRepository) TopUpHistory(ctx context.Context, userID int) ([]model.TopUpHistory, error) {
+func (r *WalletRepository) TopUpHistory(ctx context.Context, userID int, page, limit int) ([]model.TopUpHistory, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT t.id, t.wallet_id, t.amount, t.created_at
 		FROM top_up_history t
 		JOIN wallets w ON t.wallet_id = w.id
 		WHERE w.user_id = $1
-		ORDER BY t.created_at DESC`, userID)
+		ORDER BY t.created_at DESC
+		LIMIT $2 OFFSET $3`, userID, limit, (page-1)*limit)
 	if err != nil {
 		return nil, err
 	}

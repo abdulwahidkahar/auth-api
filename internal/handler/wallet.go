@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -75,12 +76,30 @@ func (wh *WalletHandler) Transfer(c *gin.Context) {
 func (wh *WalletHandler) GetHistoryTransfer(c *gin.Context) {
 	userID := int(c.MustGet("id").(float64))
 
-	transfers, err := wh.walletService.GetHistoryTransfer(c.Request.Context(), userID)
+	page := c.DefaultQuery("page", "1")
+	limit := c.DefaultQuery("limit", "10")
+
+	pageInt, err := strconv.Atoi(page)
+	if err != nil || pageInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
+		return
+	}
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+		return
+	}
+
+	transfers, err := wh.walletService.GetHistoryTransfer(c.Request.Context(), userID, pageInt, limitInt)
 	if err != nil {
 		statusCode, message := mapWalletError(err)
 		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
+
+	c.Header("X-Page", page)
+	c.Header("X-Limit", limit)
 
 	c.JSON(http.StatusOK, gin.H{"transfers": transfers})
 }
@@ -88,7 +107,22 @@ func (wh *WalletHandler) GetHistoryTransfer(c *gin.Context) {
 func (wh *WalletHandler) GetHistoryTopUp(c *gin.Context) {
 	userID := int(c.MustGet("id").(float64))
 
-	topUps, err := wh.walletService.GetHistoryTopUp(c.Request.Context(), userID)
+	page := c.DefaultQuery("page", "1")
+	limit := c.DefaultQuery("limit", "10")
+
+	pageInt, err := strconv.Atoi(page)
+	if err != nil || pageInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
+		return
+	}
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+		return
+	}
+
+	topUps, err := wh.walletService.GetHistoryTopUp(c.Request.Context(), userID, pageInt, limitInt)
 	if err != nil {
 		statusCode, message := mapWalletError(err)
 		c.JSON(statusCode, gin.H{"error": message})
